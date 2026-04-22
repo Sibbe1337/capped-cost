@@ -1,5 +1,6 @@
 import type { CostResult, CostError, FetchOptions } from "./types.js";
 import { startOfMonthUnix, dayKeyFromUnix } from "./time.js";
+import { explainOpenAIError } from "./errors.js";
 
 const OPENAI_COSTS_URL = "https://api.openai.com/v1/organization/costs";
 
@@ -44,9 +45,8 @@ export async function fetchOpenAICost(
 
     if (!res.ok) {
       const body = await res.text();
-      return {
-        error: `OpenAI ${res.status}: ${body.slice(0, 200)}`,
-      };
+      const explained = explainOpenAIError(res.status, body);
+      return { error: explained.error, hint: explained.hint };
     }
 
     const json = (await res.json()) as OpenAICostResponse;

@@ -11,6 +11,17 @@
 export { fetchOpenAICost } from "./openai.js";
 export { fetchAnthropicCost } from "./anthropic.js";
 export { fetchAllCosts } from "./combined.js";
+export {
+  fetchOpenAICostBreakdown,
+  fetchAnthropicCostBreakdown,
+  fetchAllBreakdowns,
+} from "./breakdown.js";
+export { forecast } from "./forecast.js";
+export {
+  explainOpenAIError,
+  explainAnthropicError,
+  formatErrorForTerminal,
+} from "./errors.js";
 export type {
   CostResult,
   CostError,
@@ -18,3 +29,11 @@ export type {
   CombinedCostResult,
   FetchOptions,
 } from "./types.js";
+export type {
+  BreakdownResult,
+  BreakdownError,
+  BreakdownOutcome,
+  CombinedBreakdown,
+} from "./breakdown.js";
+export type { ForecastInput, ForecastResult } from "./forecast.js";
+export type { ExplainedError } from "./errors.js";

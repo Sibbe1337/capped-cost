@@ -1,6 +1,10 @@
 # capped-cost
 
-Fetch monthly OpenAI and Anthropic API spend. Library, CLI, and webhook alerts. Zero runtime dependencies.
+[![npm](https://img.shields.io/npm/v/capped-cost)](https://www.npmjs.com/package/capped-cost)
+[![CI](https://github.com/Sibbe1337/capped-cost/actions/workflows/ci.yml/badge.svg)](https://github.com/Sibbe1337/capped-cost/actions/workflows/ci.yml)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/capped-cost)](https://bundlephobia.com/package/capped-cost)
+
+Fetch monthly OpenAI and Anthropic API spend. Library, CLI, per-model breakdown, end-of-month forecast, and Slack/Discord webhook alerts. Zero runtime dependencies.
 
 ```bash
 npm install capped-cost
@@ -8,11 +12,40 @@ npm install capped-cost
 
 Built alongside [Capped](https://getcapped.app) — a Chrome extension that watches your OpenAI and Anthropic spend and alerts you at 80/100/150% of a monthly cap. If you want the budgeting + alerting without writing the cron yourself, try the extension. If you want to build something custom, this package is the primitive.
 
+---
+
+## 60-second quickstart
+
+```bash
+# Install globally
+npm install -g capped-cost
+
+# Run the setup wizard — tests your keys live, writes .env.example
+capped-cost init
+
+# Check current spend
+capped-cost
+
+# Per-model breakdown
+capped-cost breakdown
+
+# Projected end-of-month
+capped-cost forecast --cap=100
+```
+
+That's it. Set `OPENAI_ADMIN_KEY` and/or `ANTHROPIC_ADMIN_KEY` in your environment (or let `init` write an `.env.example` for you) and every command works.
+
+---
+
 ## What you get
 
 - **Library** — `fetchOpenAICost`, `fetchAnthropicCost`, `fetchAllCosts`. Normalized output, cents everywhere.
-- **CLI** — `capped-cost` binary. Cron-friendly exit codes. JSON or human-readable.
+- **CLI** — `capped-cost` binary with four subcommands: `init`, `breakdown`, `forecast`, and the default spend check.
+- **Per-model breakdown** — `fetchOpenAICostBreakdown`, `fetchAnthropicCostBreakdown`, `fetchAllBreakdowns` group spend by model/line-item.
+- **Forecast** — `forecast()` projects your run rate to end-of-month and classifies it as `under`, `on-pace`, or `over`.
+- **Better errors** — `explainOpenAIError` / `explainAnthropicError` map HTTP status codes to human-readable hints (wrong key type, missing permissions, rate limits).
 - **Webhook helpers** — Slack + Discord, auto-detected. `postCostAlert` + `checkAndAlert` for one-shot cron alerts.
+- **GitHub Actions template** — drop-in hourly cron workflow in `examples/`.
 
 ~6 KB gzipped. Zero runtime deps. Works on Node 18+, Bun, Deno, browsers, Chrome extensions.
 
@@ -57,6 +90,49 @@ const { totalCents, dailyCents, providers } = await fetchAllCosts({
 console.log(`Combined month to date: $${(totalCents / 100).toFixed(2)}`);
 ```
 
+### Per-model breakdown
+
+```ts
+import { fetchAllBreakdowns } from "capped-cost";
+
+const breakdown = await fetchAllBreakdowns({
+  openai: process.env.OPENAI_ADMIN_KEY,
+  anthropic: process.env.ANTHROPIC_ADMIN_KEY,
+});
+
+if (breakdown.openai && !("error" in breakdown.openai)) {
+  for (const [model, cents] of breakdown.openai.byLineItem) {
+    console.log(`  ${model}: $${(cents / 100).toFixed(2)}`);
+  }
+}
+```
+
+### End-of-month forecast
+
+```ts
+import { fetchAllCosts, forecast } from "capped-cost";
+
+const { totalCents } = await fetchAllCosts({ openai: process.env.OPENAI_ADMIN_KEY });
+const f = forecast({ totalCents, capUsd: 100 });
+
+console.log(`Day ${f.dayOfMonth}/${f.daysInMonth}`);
+console.log(`Projected EOM: $${f.projectedEomUsd.toFixed(2)}`);
+console.log(`Status: ${f.status}`); // "under" | "on-pace" | "over"
+```
+
+### Better error messages
+
+```ts
+import { explainOpenAIError, formatErrorForTerminal } from "capped-cost";
+
+// Map HTTP status + message to actionable hints
+const explained = explainOpenAIError(401, "Invalid authentication");
+// explained.hint → ["Make sure you're using an Organization Admin Key, not a standard API key", ...]
+
+// Format for terminal output
+console.error(formatErrorForTerminal(explained));
+```
+
 ---
 
 ## 2. CLI
@@ -64,6 +140,22 @@ console.log(`Combined month to date: $${(totalCents / 100).toFixed(2)}`);
 ```bash
 npm install -g capped-cost
 ```
+
+### `capped-cost init` — first-time setup wizard
+
+Guides you through getting admin keys from both providers, tests each key live, and writes an `.env.example` you can copy directly into CI or your deployment platform.
+
+```
+$ capped-cost init
+? Do you have an OpenAI Organization Admin Key? (y/n) › y
+? Paste your OpenAI Admin Key: › sk-admin-...
+  Testing... ✓ Key works — current spend: $12.40
+? Do you have an Anthropic Admin Key? (y/n) › y
+...
+  .env.example written.
+```
+
+### `capped-cost` — check current spend
 
 ```bash
 # Minimum
@@ -84,6 +176,41 @@ capped-cost --json | jq '.totalUsd'
 capped-cost --daily
 ```
 
+### `capped-cost breakdown` — spend by model
+
+```bash
+capped-cost breakdown
+# openai      $  34.12  ████████████ 68%
+#   gpt-4o                   $24.10
+#   gpt-4o-mini              $ 8.40
+#   gpt-4-turbo              $ 1.62
+#
+# anthropic   $  15.88  ████░░░░░░░░ 32%
+#   claude-3-7-sonnet        $10.20
+#   claude-3-5-haiku         $ 5.68
+#
+# total      $50.00
+
+capped-cost breakdown --json | jq '.openai.byLineItem'
+```
+
+### `capped-cost forecast` — projected end-of-month
+
+```bash
+capped-cost forecast
+# Day 12 of 30
+# Month-to-date: $20.00
+# Daily average: $1.67
+# Projected EOM: $50.00
+
+capped-cost forecast --cap=100
+# ...
+# Cap:           $100.00 (projected 50%)
+# Comfortably under cap.
+
+capped-cost forecast --cap=100 --json
+```
+
 ### Exit codes
 
 | Code | Meaning |
@@ -94,8 +221,6 @@ capped-cost --daily
 
 ### Cron example
 
-Check every hour, alert Slack if over cap:
-
 ```bash
 0 * * * * capped-cost --cap=100 || curl -X POST \
   -H 'Content-Type: application/json' \
@@ -103,7 +228,7 @@ Check every hour, alert Slack if over cap:
   "$SLACK_WEBHOOK_URL"
 ```
 
-For a cleaner alert pipeline, use the webhook module below.
+For a cleaner alert pipeline, use the webhook module below. For a drop-in GitHub Actions workflow, see [`examples/github-action-cost-check.yml`](examples/github-action-cost-check.yml).
 
 ---
 
@@ -188,26 +313,35 @@ Store admin keys the same way you store any production secret. `capped-cost` doe
 ## API reference
 
 ```ts
-// Library
-fetchOpenAICost(adminKey: string, options?: FetchOptions)
-  => Promise<CostResult | CostError>
+// Cost fetching
+fetchOpenAICost(adminKey: string, options?: FetchOptions): Promise<CostResult | CostError>
+fetchAnthropicCost(adminKey: string, options?: FetchOptions): Promise<CostResult | CostError>
+fetchAllCosts(keys, options?: FetchOptions): Promise<CombinedCostResult>
 
-fetchAnthropicCost(adminKey: string, options?: FetchOptions)
-  => Promise<CostResult | CostError>
+// Per-model breakdown
+fetchOpenAICostBreakdown(adminKey: string, options?: FetchOptions): Promise<BreakdownResult | BreakdownError>
+fetchAnthropicCostBreakdown(adminKey: string, options?: FetchOptions): Promise<BreakdownResult | BreakdownError>
+fetchAllBreakdowns(keys, options?: FetchOptions): Promise<CombinedBreakdown>
 
-fetchAllCosts(
-  keys: { openai?: string; anthropic?: string },
-  options?: FetchOptions
-) => Promise<CombinedCostResult>
+// Forecast
+forecast(input: ForecastInput): ForecastResult
+
+// Error helpers
+explainOpenAIError(status: number, message: string): ExplainedError
+explainAnthropicError(status: number, message: string): ExplainedError
+formatErrorForTerminal(error: ExplainedError): string
 
 // Webhook (import from "capped-cost/webhook")
-checkAndAlert(options: CheckAndAlertOptions) => Promise<CheckAndAlertResult>
-postCostAlert(target, payload) => Promise<{ ok: boolean; status?: number; error?: string }>
-formatAlertMessage(payload: AlertPayload) => string
+checkAndAlert(options: CheckAndAlertOptions): Promise<CheckAndAlertResult>
+postCostAlert(target, payload): Promise<{ ok: boolean; status?: number; error?: string }>
+formatAlertMessage(payload: AlertPayload): string
 
 // Types
 interface CostResult { dailyCents: Map<string, number>; totalCents: number; }
-interface CostError { error: string; }
+interface CostError { error: string; hint?: string[]; }
+interface BreakdownResult { totalCents: number; byLineItem: Map<string, number>; }
+interface ForecastResult { dayOfMonth: number; daysInMonth: number; totalUsd: number; dailyAvgUsd: number; projectedEomUsd: number; projectedPctOfCap?: number; overCapUsd?: number; status: "under" | "on-pace" | "over"; }
+interface ExplainedError { error: string; status?: number; hint?: string[]; }
 interface FetchOptions { fetch?: typeof globalThis.fetch; signal?: AbortSignal; }
 ```
 

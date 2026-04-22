@@ -1,0 +1,38 @@
+# .github/workflows/ai-cost-check.yml
+#
+# Drop this into your repo to get hourly alerts when your OpenAI + Anthropic
+# spend crosses 80% of a monthly cap. Requires three secrets in your repo:
+#
+#   OPENAI_ADMIN_KEY        (or just one if you only use one provider)
+#   ANTHROPIC_ADMIN_KEY
+#   SLACK_WEBHOOK_URL       (Discord works too — auto-detected)
+#
+# The workflow only pings Slack if the threshold is hit, so you won't see
+# a message every hour.
+
+name: AI spend check
+
+on:
+  schedule:
+    - cron: "0 * * * *" # every hour
+  workflow_dispatch: # also allow manual runs
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check spend and alert if over cap
+        env:
+          OPENAI_ADMIN_KEY: ${{ secrets.OPENAI_ADMIN_KEY }}
+          ANTHROPIC_ADMIN_KEY: ${{ secrets.ANTHROPIC_ADMIN_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          CAP_USD: "100"
+        run: |
+          npx -y capped-cost@latest --cap="$CAP_USD" --threshold=0.8 || \
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            -d "{\"text\":\"AI spend >= 80% of \$$CAP_USD cap. See https://platform.openai.com/usage\"}" \
+            "$SLACK_WEBHOOK_URL"

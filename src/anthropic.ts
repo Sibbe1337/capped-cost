@@ -1,5 +1,6 @@
 import type { CostResult, CostError, FetchOptions } from "./types.js";
 import { startOfMonthIso, dayKeyFromIso } from "./time.js";
+import { explainAnthropicError } from "./errors.js";
 
 const ANTHROPIC_COSTS_URL =
   "https://api.anthropic.com/v1/organizations/cost_report";
@@ -50,9 +51,8 @@ export async function fetchAnthropicCost(
 
     if (!res.ok) {
       const body = await res.text();
-      return {
-        error: `Anthropic ${res.status}: ${body.slice(0, 200)}`,
-      };
+      const explained = explainAnthropicError(res.status, body);
+      return { error: explained.error, hint: explained.hint };
     }
 
     const json = (await res.json()) as AnthropicCostResponse;

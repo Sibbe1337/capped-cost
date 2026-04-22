@@ -11,6 +11,8 @@ export interface CostResult {
 
 export interface CostError {
   error: string;
+  /** Optional human-readable guidance on common causes + fixes. */
+  hint?: string[];
 }
 
 export type ProviderCostResult = CostResult | CostError;
