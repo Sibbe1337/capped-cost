@@ -31,6 +31,26 @@ describe("formatAlertMessage", () => {
     });
     expect(msg).toContain("(production)");
   });
+
+  it("explains threshold crossings and cooldown reminders", () => {
+    const crossed = formatAlertMessage({
+      totalUsd: 81,
+      capUsd: 100,
+      threshold: 0.8,
+      reason: "crossed",
+      status: "threshold-crossed",
+    });
+    const reminder = formatAlertMessage({
+      totalUsd: 90,
+      capUsd: 100,
+      threshold: 0.8,
+      reason: "cooldown",
+      status: "threshold-reached",
+    });
+
+    expect(crossed).toContain("Crossed 80%");
+    expect(reminder).toContain("Still above 80% after cooldown");
+  });
 });
 
 describe("postCostAlert", () => {

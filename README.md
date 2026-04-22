@@ -4,239 +4,292 @@
 [![CI](https://github.com/Sibbe1337/capped-cost/actions/workflows/ci.yml/badge.svg)](https://github.com/Sibbe1337/capped-cost/actions/workflows/ci.yml)
 [![bundle size](https://img.shields.io/bundlephobia/minzip/capped-cost)](https://bundlephobia.com/package/capped-cost)
 
-Fetch monthly OpenAI and Anthropic API spend. Library, CLI, per-model breakdown, end-of-month forecast, and Slack/Discord webhook alerts. Zero runtime dependencies.
+`capped-cost` is a small, zero-runtime-dependency library and CLI for reading monthly OpenAI and Anthropic organization spend, projecting end-of-month burn, and sending deduped Slack or Discord alerts.
+
+It is built for scripts, cron jobs, CI, and internal tooling. It is not a billing platform, not a dashboard SaaS, and not a secret-management solution.
+
+- Node 18+
+- Zero runtime dependencies
+- ESM + CJS
+- CLI + library
+- OpenAI + Anthropic
+- JSON output with `schemaVersion`
 
 ```bash
 npm install capped-cost
 ```
 
-Built alongside [Capped](https://getcapped.app) — a Chrome extension that watches your OpenAI and Anthropic spend and alerts you at 80/100/150% of a monthly cap. If you want the budgeting + alerting without writing the cron yourself, try the extension. If you want to build something custom, this package is the primitive.
+## What It Does
 
----
+- Reads month-to-date usage cost from OpenAI and Anthropic admin APIs
+- Normalizes totals and daily series across providers
+- Breaks spend down by model / line item
+- Projects end-of-month spend with explainable strategies
+- Sends Slack or Discord alerts only on threshold crossings or cooldown expiry
 
-## 60-second quickstart
+## What It Does Not Do
+
+- It does not proxy API calls for you
+- It does not store long-term history in a database
+- It does not block provider usage or enforce hard budgets
+- It does not make client-side admin-key usage safe
+- It does not replace your cloud secret store or CI secret manager
+
+## Why Admin Keys Are Required
+
+The spend endpoints used here are organization-level/admin endpoints. Standard model-serving API keys are not enough.
+
+That is why the package asks for:
+
+- `OPENAI_ADMIN_KEY`
+- `ANTHROPIC_ADMIN_KEY`
+
+If you only use one provider, you only need that provider's admin key.
+
+## Security Model
+
+This package is designed to be safe by default, but it still handles high-value secrets. The intended model is:
+
+- secrets live in environment variables, CI secrets, or a local-only file
+- `.env.example` is placeholder-only
+- real secrets are only written to `.env.capped.local` when explicitly requested
+- the local secrets file is gitignored
+- the CLI avoids echoing secrets back to the terminal
+
+This package is best used on:
+
+- a developer machine
+- a cron host
+- CI with proper secret storage
+- server-side automation
+
+It is not safe to ship org admin keys to a public browser app, public website, or distributed Chrome extension.
+
+## Browser And Extension Caveat
+
+The fetch-based library can technically run anywhere that provides `fetch`, including browser-like environments. That does not mean it is appropriate to expose there.
+
+If you are building a browser app or extension:
+
+- do not embed org admin keys in shipped client code
+- do not treat obfuscation as protection
+- prefer a backend, worker, or other trusted boundary
+- if you insist on local-only/private usage, understand that the user machine holds the secret
+
+## Quickstart
 
 ```bash
-# Install globally
+# install globally if you want the CLI
 npm install -g capped-cost
 
-# Run the setup wizard — tests your keys live, writes .env.example
+# safe setup wizard
 capped-cost init
 
-# Check current spend
-capped-cost
+# current spend
+capped-cost check
 
-# Per-model breakdown
+# model / line-item breakdown
 capped-cost breakdown
 
-# Projected end-of-month
+# forecast against a cap
 capped-cost forecast --cap=100
+
+# alert only when thresholds are crossed or cooldown expires
+capped-cost alert --cap=100 --webhook-url="$CAPPED_WEBHOOK_URL"
 ```
 
-That's it. Set `OPENAI_ADMIN_KEY` and/or `ANTHROPIC_ADMIN_KEY` in your environment (or let `init` write an `.env.example` for you) and every command works.
+## Init Wizard
 
----
+`capped-cost init` is intentionally conservative.
 
-## What you get
+It will:
 
-- **Library** — `fetchOpenAICost`, `fetchAnthropicCost`, `fetchAllCosts`. Normalized output, cents everywhere.
-- **CLI** — `capped-cost` binary with four subcommands: `init`, `breakdown`, `forecast`, and the default spend check.
-- **Per-model breakdown** — `fetchOpenAICostBreakdown`, `fetchAnthropicCostBreakdown`, `fetchAllBreakdowns` group spend by model/line-item.
-- **Forecast** — `forecast()` projects your run rate to end-of-month and classifies it as `under`, `on-pace`, or `over`.
-- **Better errors** — `explainOpenAIError` / `explainAnthropicError` map HTTP status codes to human-readable hints (wrong key type, missing permissions, rate limits).
-- **Webhook helpers** — Slack + Discord, auto-detected. `postCostAlert` + `checkAndAlert` for one-shot cron alerts.
-- **GitHub Actions template** — drop-in hourly cron workflow in `examples/`.
+- prompt for admin keys without echoing them visibly
+- optionally validate keys live
+- write a placeholder-only `.env.example`
+- optionally write real secrets to `.env.capped.local`
 
-~6 KB gzipped. Zero runtime deps. Works on Node 18+, Bun, Deno, browsers, Chrome extensions.
+It will not:
 
----
+- write your real secrets to `.env.example`
+- print full secrets or webhook URLs back to the terminal
+- silently create a secret-bearing file without confirmation
 
-## 1. Library
+Examples:
 
-### OpenAI only
+```bash
+# interactive
+capped-cost init
 
-```ts
-import { fetchOpenAICost } from "capped-cost";
-
-const result = await fetchOpenAICost(process.env.OPENAI_ADMIN_KEY!);
-
-if ("error" in result) {
-  console.error(result.error);
-} else {
-  console.log(`Month to date: $${(result.totalCents / 100).toFixed(2)}`);
-  for (const [day, cents] of result.dailyCents) {
-    console.log(`  ${day}: $${(cents / 100).toFixed(2)}`);
-  }
-}
+# non-interactive
+capped-cost init \
+  --openai-key="$OPENAI_ADMIN_KEY" \
+  --cap=100 \
+  --webhook-url="$CAPPED_WEBHOOK_URL" \
+  --write-secrets-file \
+  --yes
 ```
 
-### Anthropic only
+## CLI
 
-```ts
-import { fetchAnthropicCost } from "capped-cost";
-// same shape as fetchOpenAICost
+### `check`
+
+Reads current month-to-date spend and exits non-zero only for threshold or provider/config problems.
+
+```bash
+capped-cost check --cap=100 --threshold=0.8
+capped-cost check --provider=openai --format=json
+capped-cost --provider=anthropic --daily
 ```
 
-### Both providers in parallel
+### `breakdown`
+
+Groups spend by provider and model / line item.
+
+```bash
+capped-cost breakdown
+capped-cost breakdown --provider=openai --format=json
+```
+
+### `forecast`
+
+Projects end-of-month spend.
+
+```bash
+capped-cost forecast --cap=100
+capped-cost forecast --strategy=rolling-7d --format=json
+capped-cost forecast --strategy=weighted-recent
+```
+
+### `alert`
+
+Runs a real alerting flow:
+
+- fetch spend
+- evaluate thresholds
+- send a webhook only when needed
+- persist dedupe state in `.capped-cost.state.json` by default
+
+```bash
+capped-cost alert \
+  --cap=100 \
+  --thresholds=0.8,1,1.5 \
+  --cooldown-ms=21600000 \
+  --webhook-url="$CAPPED_WEBHOOK_URL"
+```
+
+This is the command you want for cron/CI alerting. Do not use shell `|| curl` as the primary alerting mechanism. That pattern conflates budget alerts with provider failures and config failures.
+
+## Alerting Semantics
+
+`capped-cost alert` explicitly separates these cases:
+
+- configuration failure
+- provider failure
+- under threshold
+- threshold crossed
+- threshold still reached after cooldown
+- webhook delivery failure
+
+Important behavior:
+
+- provider failures do not emit budget alerts
+- webhook failures do not advance the dedupe state
+- state resets naturally when the month changes
+
+Default alert thresholds are:
+
+- `0.8`
+- `1`
+- `1.5`
+
+Default cooldown is 6 hours.
+
+## Correct Cron And CI Usage
+
+The dedicated alert path assumes the state file persists between runs.
+
+Good fits:
+
+- local cron on a persistent machine
+- a VM
+- a container with mounted storage
+- GitHub Actions with cache-backed state
+
+GitHub-hosted runners are ephemeral, so dedupe only works if you restore and save the state file. See [`examples/github-action-cost-check.yml`](./examples/github-action-cost-check.yml) for a working pattern.
+
+## Forecast Strategies
+
+The forecast intentionally stays explainable. It does not claim statistical sophistication it does not have.
+
+Available strategies:
+
+- `linear`: project from the month-to-date average
+- `rolling-7d`: project from the last 7 calendar days
+- `weighted-recent`: weight recent days more heavily
+
+Each forecast result includes:
+
+- requested strategy
+- strategy actually used
+- observation window
+- confidence note / caveat
+
+If you request a recent-history strategy without daily data, the result falls back to `linear` and says so explicitly.
+
+## Library Usage
+
+### Fetch spend
 
 ```ts
 import { fetchAllCosts } from "capped-cost";
 
-const { totalCents, dailyCents, providers } = await fetchAllCosts({
+const result = await fetchAllCosts({
   openai: process.env.OPENAI_ADMIN_KEY,
   anthropic: process.env.ANTHROPIC_ADMIN_KEY,
 });
 
-console.log(`Combined month to date: $${(totalCents / 100).toFixed(2)}`);
+console.log(result.totalCents);
+console.log(result.dailyCents);
+console.log(result.providers);
 ```
 
-### Per-model breakdown
-
-```ts
-import { fetchAllBreakdowns } from "capped-cost";
-
-const breakdown = await fetchAllBreakdowns({
-  openai: process.env.OPENAI_ADMIN_KEY,
-  anthropic: process.env.ANTHROPIC_ADMIN_KEY,
-});
-
-if (breakdown.openai && !("error" in breakdown.openai)) {
-  for (const [model, cents] of breakdown.openai.byLineItem) {
-    console.log(`  ${model}: $${(cents / 100).toFixed(2)}`);
-  }
-}
-```
-
-### End-of-month forecast
+### Forecast
 
 ```ts
 import { fetchAllCosts, forecast } from "capped-cost";
 
-const { totalCents } = await fetchAllCosts({ openai: process.env.OPENAI_ADMIN_KEY });
-const f = forecast({ totalCents, capUsd: 100 });
+const costs = await fetchAllCosts({
+  openai: process.env.OPENAI_ADMIN_KEY,
+});
 
-console.log(`Day ${f.dayOfMonth}/${f.daysInMonth}`);
-console.log(`Projected EOM: $${f.projectedEomUsd.toFixed(2)}`);
-console.log(`Status: ${f.status}`); // "under" | "on-pace" | "over"
+const projection = forecast({
+  totalCents: costs.totalCents,
+  dailyCents: costs.dailyCents,
+  capUsd: 100,
+  strategy: "rolling-7d",
+});
+
+console.log(projection.projectedEomUsd);
+console.log(projection.confidenceNote);
 ```
 
-### Better error messages
+### Alert evaluation
 
 ```ts
-import { explainOpenAIError, formatErrorForTerminal } from "capped-cost";
+import { evaluateAlert } from "capped-cost";
 
-// Map HTTP status + message to actionable hints
-const explained = explainOpenAIError(401, "Invalid authentication");
-// explained.hint → ["Make sure you're using an Organization Admin Key, not a standard API key", ...]
+const evaluation = evaluateAlert({
+  totalCents: 8500,
+  capUsd: 100,
+  thresholds: [0.8, 1, 1.5],
+});
 
-// Format for terminal output
-console.error(formatErrorForTerminal(explained));
+console.log(evaluation.status);
+console.log(evaluation.shouldAlert);
 ```
 
----
-
-## 2. CLI
-
-```bash
-npm install -g capped-cost
-```
-
-### `capped-cost init` — first-time setup wizard
-
-Guides you through getting admin keys from both providers, tests each key live, and writes an `.env.example` you can copy directly into CI or your deployment platform.
-
-```
-$ capped-cost init
-? Do you have an OpenAI Organization Admin Key? (y/n) › y
-? Paste your OpenAI Admin Key: › sk-admin-...
-  Testing... ✓ Key works — current spend: $12.40
-? Do you have an Anthropic Admin Key? (y/n) › y
-...
-  .env.example written.
-```
-
-### `capped-cost` — check current spend
-
-```bash
-# Minimum
-export OPENAI_ADMIN_KEY=sk-admin-...
-export ANTHROPIC_ADMIN_KEY=...
-capped-cost
-
-# With a cap; exits 2 when month-to-date >= 80% of $100
-capped-cost --cap=100
-
-# Strict: alert when at 50% of cap
-capped-cost --cap=100 --threshold=0.5
-
-# JSON output
-capped-cost --json | jq '.totalUsd'
-
-# Include per-day breakdown
-capped-cost --daily
-```
-
-### `capped-cost breakdown` — spend by model
-
-```bash
-capped-cost breakdown
-# openai      $  34.12  ████████████ 68%
-#   gpt-4o                   $24.10
-#   gpt-4o-mini              $ 8.40
-#   gpt-4-turbo              $ 1.62
-#
-# anthropic   $  15.88  ████░░░░░░░░ 32%
-#   claude-3-7-sonnet        $10.20
-#   claude-3-5-haiku         $ 5.68
-#
-# total      $50.00
-
-capped-cost breakdown --json | jq '.openai.byLineItem'
-```
-
-### `capped-cost forecast` — projected end-of-month
-
-```bash
-capped-cost forecast
-# Day 12 of 30
-# Month-to-date: $20.00
-# Daily average: $1.67
-# Projected EOM: $50.00
-
-capped-cost forecast --cap=100
-# ...
-# Cap:           $100.00 (projected 50%)
-# Comfortably under cap.
-
-capped-cost forecast --cap=100 --json
-```
-
-### Exit codes
-
-| Code | Meaning |
-|---|---|
-| `0` | Under threshold (or no cap set) |
-| `1` | Config or API error |
-| `2` | At or above threshold |
-
-### Cron example
-
-```bash
-0 * * * * capped-cost --cap=100 || curl -X POST \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"AI spend alert — check the usage dashboard"}' \
-  "$SLACK_WEBHOOK_URL"
-```
-
-For a cleaner alert pipeline, use the webhook module below. For a drop-in GitHub Actions workflow, see [`examples/github-action-cost-check.yml`](examples/github-action-cost-check.yml).
-
----
-
-## 3. Webhook helpers
-
-Post a formatted alert to Slack or Discord. Provider auto-detected from URL.
-
-### One-shot check + alert
+### Webhook helper
 
 ```ts
 import { checkAndAlert } from "capped-cost/webhook";
@@ -247,133 +300,101 @@ const result = await checkAndAlert({
     anthropic: process.env.ANTHROPIC_ADMIN_KEY,
   },
   capUsd: 100,
-  threshold: 0.8,                    // optional, default 0.8
-  webhookUrl: process.env.SLACK_WEBHOOK_URL!,
-  label: "production",               // optional; appears in alert text
+  thresholds: [0.8, 1, 1.5],
+  cooldownMs: 6 * 60 * 60 * 1000,
+  webhookUrl: process.env.CAPPED_WEBHOOK_URL!,
+  state: previousState,
 });
 
-console.log(`Total: $${result.totalUsd.toFixed(2)} (${(result.pct * 100).toFixed(0)}%)`);
-if (result.alerted) {
-  console.log(result.webhookResult?.ok ? "alerted" : `alert failed: ${result.webhookResult?.error}`);
+if (result.status === "provider-failure") {
+  console.error(result.fetchErrors);
 }
 ```
 
-### Lower-level primitives
+If you use the library path, you own state persistence yourself.
 
-```ts
-import { postCostAlert, formatAlertMessage } from "capped-cost/webhook";
+## JSON Output
 
-// Just format, don't send — drop into your own pipeline
-const text = formatAlertMessage({
-  totalUsd: 87.23,
-  capUsd: 100,
-  threshold: 0.8,
-  label: "production",
-});
-// → ":warning: AI spend alert (production)\nMonth-to-date: $87.23 / $100.00 cap — 87% used\nThreshold: 80%"
+Every JSON-capable CLI command includes:
 
-// Or send directly
-await postCostAlert(
-  { url: process.env.SLACK_WEBHOOK_URL! },
-  { totalUsd: 87.23, capUsd: 100, threshold: 0.8, label: "production" }
-);
+- `schemaVersion`
+- `command`
+- `status`
+- `ok`
+
+Example:
+
+```bash
+capped-cost check --provider=openai --format=json
 ```
 
-### Complete 10-line cron job
-
-```ts
-// budget-check.ts — run from cron
-import { checkAndAlert } from "capped-cost/webhook";
-
-const r = await checkAndAlert({
-  keys: {
-    openai: process.env.OPENAI_ADMIN_KEY,
-    anthropic: process.env.ANTHROPIC_ADMIN_KEY,
-  },
-  capUsd: Number(process.env.CAP_USD || 100),
-  webhookUrl: process.env.SLACK_WEBHOOK_URL!,
-});
-
-if (r.alerted && !r.webhookResult?.ok) process.exit(1);
+```json
+{
+  "schemaVersion": 1,
+  "command": "check",
+  "status": "ok",
+  "ok": true,
+  "provider": "openai",
+  "totalUsd": 12.34
+}
 ```
 
----
+Treat `schemaVersion` as the contract marker for automation.
 
-## Admin keys
+## Config Precedence
 
-Both providers require an **Organization Admin Key** — different from a standard API key. Admin keys can read usage but cannot make model calls or spend money.
+Configuration is loaded in this order:
 
-- **OpenAI**: https://platform.openai.com/settings/organization/admin-keys (requires Organization Owner role)
-- **Anthropic**: https://console.anthropic.com/settings/admin-keys
+1. CLI flags
+2. `process.env`
+3. `.env.capped.local`
+4. `.env.local`
+5. `.env`
 
-Store admin keys the same way you store any production secret. `capped-cost` does not proxy, log, or transmit them anywhere outside the direct call to the provider.
+Main environment variables:
 
----
+- `OPENAI_ADMIN_KEY`
+- `ANTHROPIC_ADMIN_KEY`
+- `CAPPED_PROVIDER`
+- `CAPPED_CAP_USD`
+- `CAPPED_CHECK_THRESHOLD`
+- `CAPPED_FORECAST_STRATEGY`
+- `CAPPED_WEBHOOK_URL`
+- `CAPPED_ALERT_THRESHOLDS`
+- `CAPPED_ALERT_COOLDOWN_MS`
+- `CAPPED_COST_STATE_FILE`
+- `CAPPED_TIMEOUT_MS`
 
-## API reference
+## Exit Codes
 
-```ts
-// Cost fetching
-fetchOpenAICost(adminKey: string, options?: FetchOptions): Promise<CostResult | CostError>
-fetchAnthropicCost(adminKey: string, options?: FetchOptions): Promise<CostResult | CostError>
-fetchAllCosts(keys, options?: FetchOptions): Promise<CombinedCostResult>
+`check` and `forecast`:
 
-// Per-model breakdown
-fetchOpenAICostBreakdown(adminKey: string, options?: FetchOptions): Promise<BreakdownResult | BreakdownError>
-fetchAnthropicCostBreakdown(adminKey: string, options?: FetchOptions): Promise<BreakdownResult | BreakdownError>
-fetchAllBreakdowns(keys, options?: FetchOptions): Promise<CombinedBreakdown>
+- `0`: success / under threshold
+- `1`: configuration or provider failure
+- `2`: threshold reached or projection over cap
 
-// Forecast
-forecast(input: ForecastInput): ForecastResult
+`alert`:
 
-// Error helpers
-explainOpenAIError(status: number, message: string): ExplainedError
-explainAnthropicError(status: number, message: string): ExplainedError
-formatErrorForTerminal(error: ExplainedError): string
+- `0`: success, including deduped "no alert needed" runs
+- `1`: configuration failure
+- `2`: provider failure
+- `3`: webhook delivery failure
 
-// Webhook (import from "capped-cost/webhook")
-checkAndAlert(options: CheckAndAlertOptions): Promise<CheckAndAlertResult>
-postCostAlert(target, payload): Promise<{ ok: boolean; status?: number; error?: string }>
-formatAlertMessage(payload: AlertPayload): string
+Unhandled internal errors exit `10`.
 
-// Types
-interface CostResult { dailyCents: Map<string, number>; totalCents: number; }
-interface CostError { error: string; hint?: string[]; }
-interface BreakdownResult { totalCents: number; byLineItem: Map<string, number>; }
-interface ForecastResult { dayOfMonth: number; daysInMonth: number; totalUsd: number; dailyAvgUsd: number; projectedEomUsd: number; projectedPctOfCap?: number; overCapUsd?: number; status: "under" | "on-pace" | "over"; }
-interface ExplainedError { error: string; status?: number; hint?: string[]; }
-interface FetchOptions { fetch?: typeof globalThis.fetch; signal?: AbortSignal; }
+## Development
+
+```bash
+npm ci
+npm run verify
 ```
 
----
+Tests are deterministic and should not make real network calls.
 
-## Runtime support
+## Related Docs
 
-- Node 18+ (native `fetch`)
-- Bun
-- Deno
-- Every modern browser (CORS permitting)
-- Chrome extensions (service workers + content scripts)
+- [SECURITY.md](./SECURITY.md)
+- [CONTRIBUTING.md](./CONTRIBUTING.md)
+- [CHANGELOG.md](./CHANGELOG.md)
 
----
-
-## Roadmap
-
-- [ ] Gemini adapter (via Google Cloud Billing API) — [#2](https://github.com/Sibbe1337/capped-cost/issues/2)
-- [ ] AWS Bedrock adapter (via Cost Explorer) — [#3](https://github.com/Sibbe1337/capped-cost/issues/3)
-- [ ] Rate-limit metrics output (requests/day + tokens/day) — [#1](https://github.com/Sibbe1337/capped-cost/issues/1)
-
-PRs welcome. Gemini and Bedrock each need provider-specific auth flows that would break the zero-deps promise of this package — if built, they'll likely ship as separate companion packages (`capped-cost-gemini`, `capped-cost-bedrock`) so this core stays lean.
-
----
-
-## License
-
-MIT.
-
-## Related reading
-
-- [What does the OpenAI API actually cost in 2026?](https://getcapped.app/openai-api-cost)
-- [Why is my OpenAI bill so high? 7 common causes](https://getcapped.app/why-is-my-openai-bill-so-high)
-- [How to reduce OpenAI API costs in 2026](https://getcapped.app/reduce-openai-api-costs)
-- [OpenAI vs Claude API pricing comparison](https://getcapped.app/openai-vs-claude-api-pricing)
+Built alongside [Capped](https://getcapped.app), but this package is intended to stand on its own as a small automation primitive.

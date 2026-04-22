@@ -17,6 +17,7 @@ export {
   fetchAllBreakdowns,
 } from "./breakdown.js";
 export { forecast } from "./forecast.js";
+export { evaluateAlert, normalizeThresholds } from "./alert.js";
 export {
   explainOpenAIError,
   explainAnthropicError,
@@ -35,5 +36,13 @@ export type {
   BreakdownOutcome,
   CombinedBreakdown,
 } from "./breakdown.js";
-export type { ForecastInput, ForecastResult } from "./forecast.js";
+export type { ForecastInput, ForecastResult, ForecastStrategy } from "./forecast.js";
+export type {
+  AlertCommandStatus,
+  AlertEvaluationInput,
+  AlertEvaluationResult,
+  AlertState,
+  AlertThresholdState,
+  AlertTriggerReason,
+} from "./alert.js";
 export type { ExplainedError } from "./errors.js";

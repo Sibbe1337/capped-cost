@@ -51,4 +51,65 @@ describe("forecast", () => {
     expect(r.overCapUsd).toBeUndefined();
     expect(r.status).toBe("under");
   });
+
+  it("supports a rolling 7-day strategy when daily data is available", () => {
+    const now = new Date(Date.UTC(2026, 3, 10, 12, 0, 0));
+    const dailyCents = new Map([
+      ["2026-04-04", 1000],
+      ["2026-04-05", 2000],
+      ["2026-04-06", 3000],
+      ["2026-04-07", 4000],
+      ["2026-04-08", 5000],
+      ["2026-04-09", 6000],
+      ["2026-04-10", 7000],
+    ]);
+    const r = forecast({
+      dailyCents,
+      now,
+      strategy: "rolling-7d",
+      totalCents: 28000,
+    });
+
+    expect(r.strategy).toBe("rolling-7d");
+    expect(r.observationWindowDays).toBe(7);
+    expect(r.dailyAvgUsd).toBe(40);
+    expect(r.projectedEomUsd).toBe(1080);
+    expect(r.confidenceNote.toLowerCase()).toContain("last 7");
+  });
+
+  it("weights recent days more heavily when requested", () => {
+    const now = new Date(Date.UTC(2026, 3, 10, 12, 0, 0));
+    const dailyCents = new Map([
+      ["2026-04-04", 1000],
+      ["2026-04-05", 2000],
+      ["2026-04-06", 3000],
+      ["2026-04-07", 4000],
+      ["2026-04-08", 5000],
+      ["2026-04-09", 6000],
+      ["2026-04-10", 7000],
+    ]);
+    const r = forecast({
+      dailyCents,
+      now,
+      strategy: "weighted-recent",
+      totalCents: 28000,
+    });
+
+    expect(r.strategy).toBe("weighted-recent");
+    expect(r.dailyAvgUsd).toBeCloseTo(50, 4);
+    expect(r.projectedEomUsd).toBeCloseTo(1280, 4);
+  });
+
+  it("falls back to linear when non-linear strategies lack daily data", () => {
+    const now = new Date(Date.UTC(2026, 3, 10, 12, 0, 0));
+    const r = forecast({
+      now,
+      strategy: "rolling-7d",
+      totalCents: 30000,
+    });
+
+    expect(r.requestedStrategy).toBe("rolling-7d");
+    expect(r.strategy).toBe("linear");
+    expect(r.confidenceNote.toLowerCase()).toContain("fell back");
+  });
 });

@@ -1,10 +1,10 @@
 {
   "name": "capped-cost",
-  "version": "0.3.0",
-  "description": "Track monthly OpenAI and Anthropic API spend. Library, CLI, interactive setup wizard, per-model breakdown, end-of-month forecast, and Slack/Discord webhook alerts. Zero dependencies.",
+  "version": "0.4.0",
+  "description": "Read monthly OpenAI and Anthropic admin spend, forecast budget burn, and drive deduped webhook alerts. Zero runtime dependencies.",
   "license": "MIT",
   "author": "Kodaren1338 (https://getcapped.app)",
-  "homepage": "https://getcapped.app",
+  "homepage": "https://github.com/Sibbe1337/capped-cost#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Sibbe1337/capped-cost.git"
@@ -52,14 +52,18 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
     "LICENSE",
+    "SECURITY.md",
     "examples"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/webhook.ts src/cli.ts --format esm,cjs --dts --clean",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "build": "tsup",
+    "prepublishOnly": "npm run verify",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "verify": "npm run typecheck && npm test && npm run build && npm pack --dry-run"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

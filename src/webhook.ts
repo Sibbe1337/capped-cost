@@ -1,11 +1,11 @@
 /**
  * Slack + Discord webhook helpers. Zero dependencies.
  *
- * The common pattern is: (a) run a scheduled cost check, (b) if spend is
- * above threshold, fire a webhook to alert the team. `checkAndAlert`
- * composes both steps so you can wire it up in a single cron line.
+ * `checkAndAlert` now uses threshold evaluation + optional dedupe state so
+ * callers can keep alert semantics separate from provider/config failures.
  */
 
+import { evaluateAlert, type AlertState, type AlertTriggerReason } from "./alert.js";
 import { fetchAllCosts, type AllKeys } from "./combined.js";
 import type { FetchOptions } from "./types.js";
 
@@ -21,10 +21,14 @@ export interface AlertPayload {
   totalUsd: number;
   /** User-set monthly cap in USD. */
   capUsd: number;
-  /** Fraction of cap that triggers (e.g. 0.8 = 80%). */
+  /** Fraction of cap that triggered. */
   threshold: number;
   /** Optional label (e.g. "production", "my-side-project"). */
   label?: string;
+  /** Why this alert fired. */
+  reason?: AlertTriggerReason;
+  /** Whether this was a fresh crossing or a cooldown reminder. */
+  status?: "threshold-crossed" | "threshold-reached";
 }
 
 /**
@@ -35,12 +39,22 @@ export function formatAlertMessage(a: AlertPayload): string {
   const pct = Math.round((a.totalUsd / a.capUsd) * 100);
   const thresholdPct = Math.round(a.threshold * 100);
   const icon =
-    pct >= 100 ? ":rotating_light:" : pct >= thresholdPct ? ":warning:" : ":chart_with_upwards_trend:";
+    pct >= 100
+      ? ":rotating_light:"
+      : pct >= thresholdPct
+      ? ":warning:"
+      : ":chart_with_upwards_trend:";
   const lbl = a.label ? ` (${a.label})` : "";
+  const reason =
+    a.status === "threshold-crossed"
+      ? `Crossed ${thresholdPct}%`
+      : a.reason === "cooldown"
+      ? `Still above ${thresholdPct}% after cooldown`
+      : `Threshold: ${thresholdPct}%`;
   return (
     `${icon} AI spend alert${lbl}\n` +
     `Month-to-date: $${a.totalUsd.toFixed(2)} / $${a.capUsd.toFixed(2)} cap — ${pct}% used\n` +
-    `Threshold: ${thresholdPct}%`
+    `${reason}`
   );
 }
 
@@ -66,8 +80,6 @@ export async function postCostAlert(
   const text = formatAlertMessage(payload);
   const provider = detectProvider(url);
 
-  // Slack uses `text`, Discord uses `content`. Generic gets both to
-  // maximize compatibility with arbitrary webhook receivers.
   const body =
     provider === "slack"
       ? { text }
@@ -99,46 +111,46 @@ export async function postCostAlert(
 }
 
 export interface CheckAndAlertOptions {
-  keys: AllKeys;
   capUsd: number;
-  /** Defaults to 0.8 (alert at 80% of cap). */
+  /** Defaults to 0.8 for backward compatibility. */
   threshold?: number;
-  /** Slack or Discord webhook URL. */
-  webhookUrl: string;
+  /** Preferred multi-threshold form for deduped alerting. */
+  thresholds?: number[];
+  /** Optional cooldown before a repeated in-threshold reminder fires again. */
+  cooldownMs?: number;
+  fetch?: typeof globalThis.fetch;
+  keys: AllKeys;
   /** Optional label sent in the alert (e.g. project name). */
   label?: string;
-  fetch?: typeof globalThis.fetch;
+  now?: Date;
   signal?: AbortSignal;
+  state?: AlertState | null;
+  /** Slack or Discord webhook URL. */
+  webhookUrl: string;
 }
 
 export interface CheckAndAlertResult {
-  totalUsd: number;
-  capUsd: number;
-  pct: number;
   alerted: boolean;
-  webhookResult?: { ok: boolean; status?: number; error?: string };
+  capUsd: number;
   fetchErrors: Record<string, string>;
+  nextState?: AlertState;
+  pct: number;
+  status:
+    | "under-threshold"
+    | "threshold-reached"
+    | "threshold-crossed"
+    | "provider-failure"
+    | "webhook-failure";
+  threshold?: number;
+  totalUsd: number;
+  triggerReason?: AlertTriggerReason;
+  webhookResult?: { ok: boolean; status?: number; error?: string };
 }
 
 /**
  * One-shot: fetch current spend from all supplied providers, compute total
  * vs cap, and if over threshold, post to the webhook. Returns a structured
- * result so you can log, exit non-zero, or chain further logic.
- *
- * @example
- *   import { checkAndAlert } from "capped-cost/webhook";
- *
- *   const r = await checkAndAlert({
- *     keys: {
- *       openai: process.env.OPENAI_ADMIN_KEY,
- *       anthropic: process.env.ANTHROPIC_ADMIN_KEY,
- *     },
- *     capUsd: 100,
- *     threshold: 0.8,
- *     webhookUrl: process.env.SLACK_WEBHOOK_URL!,
- *   });
- *
- *   if (r.alerted && !r.webhookResult?.ok) process.exit(1);
+ * result so you can log, persist state, or chain further logic.
  */
 export async function checkAndAlert(
   options: CheckAndAlertOptions
@@ -147,10 +159,14 @@ export async function checkAndAlert(
     keys,
     capUsd,
     threshold = 0.8,
+    thresholds,
+    cooldownMs,
     webhookUrl,
     label,
     fetch: fetchImpl,
+    now,
     signal,
+    state,
   } = options;
 
   const fetchOpts: FetchOptions = { fetch: fetchImpl, signal };
@@ -159,34 +175,83 @@ export async function checkAndAlert(
   const pct = totalUsd / capUsd;
 
   const fetchErrors: Record<string, string> = {};
-  for (const [name, r] of Object.entries(combined.providers)) {
-    if (!r) continue;
-    if ((r as { error?: string }).error) {
-      fetchErrors[name] = (r as { error: string }).error;
-    }
+  for (const [name, result] of Object.entries(combined.providers)) {
+    if (!result || !("error" in result)) continue;
+    fetchErrors[name] = result.error;
+  }
+  if (Object.keys(fetchErrors).length > 0) {
+    return {
+      alerted: false,
+      capUsd,
+      fetchErrors,
+      pct,
+      status: "provider-failure",
+      totalUsd,
+    };
   }
 
-  if (pct < threshold) {
+  const evaluation = evaluateAlert({
+    capUsd,
+    cooldownMs,
+    now,
+    previousState: state,
+    thresholds: thresholds && thresholds.length > 0 ? thresholds : [threshold],
+    totalCents: combined.totalCents,
+  });
+
+  if (!evaluation.shouldAlert) {
     return {
-      totalUsd,
-      capUsd,
-      pct,
       alerted: false,
+      capUsd,
       fetchErrors,
+      nextState: evaluation.state,
+      pct,
+      status: evaluation.status,
+      threshold: evaluation.threshold,
+      totalUsd,
     };
   }
 
   const webhookResult = await postCostAlert(
     { url: webhookUrl, fetch: fetchImpl },
-    { totalUsd, capUsd, threshold, label }
+    {
+      capUsd,
+      label,
+      reason: evaluation.triggerReason,
+      status:
+        evaluation.status === "threshold-crossed"
+          ? "threshold-crossed"
+          : "threshold-reached",
+      threshold: evaluation.threshold || threshold,
+      totalUsd,
+    }
   );
 
+  if (!webhookResult.ok) {
+    return {
+      alerted: false,
+      capUsd,
+      fetchErrors,
+      nextState: state ?? undefined,
+      pct,
+      status: "webhook-failure",
+      threshold: evaluation.threshold,
+      totalUsd,
+      triggerReason: evaluation.triggerReason,
+      webhookResult,
+    };
+  }
+
   return {
-    totalUsd,
-    capUsd,
-    pct,
     alerted: true,
-    webhookResult,
+    capUsd,
     fetchErrors,
+    nextState: evaluation.state,
+    pct,
+    status: evaluation.status,
+    threshold: evaluation.threshold,
+    totalUsd,
+    triggerReason: evaluation.triggerReason,
+    webhookResult,
   };
 }

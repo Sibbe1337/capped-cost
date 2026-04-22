@@ -1,38 +1,65 @@
-# .github/workflows/ai-cost-check.yml
+# Cache-backed GitHub Actions example for `capped-cost alert`.
 #
-# Drop this into your repo to get hourly alerts when your OpenAI + Anthropic
-# spend crosses 80% of a monthly cap. Requires three secrets in your repo:
+# Why the cache steps matter:
+# - `capped-cost alert` dedupes alerts using a local state file
+# - GitHub-hosted runners are ephemeral
+# - without restoring/saving that file, every hourly run looks "first"
 #
-#   OPENAI_ADMIN_KEY        (or just one if you only use one provider)
+# Required repo secrets:
+#   OPENAI_ADMIN_KEY        (or just one provider if you only use one)
 #   ANTHROPIC_ADMIN_KEY
-#   SLACK_WEBHOOK_URL       (Discord works too — auto-detected)
-#
-# The workflow only pings Slack if the threshold is hit, so you won't see
-# a message every hour.
+#   CAPPED_WEBHOOK_URL      (Slack or Discord)
 
-name: AI spend check
+name: AI spend alert
 
 on:
   schedule:
-    - cron: "0 * * * *" # every hour
-  workflow_dispatch: # also allow manual runs
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  check:
+  alert:
     runs-on: ubuntu-latest
+
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute month key
+        id: state
+        run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore alert state
+        uses: actions/cache/restore@v4
+        with:
+          path: .capped-cost.state.json
+          key: capped-cost-state-${{ steps.state.outputs.month }}-${{ github.run_id }}
+          restore-keys: |
+            capped-cost-state-${{ steps.state.outputs.month }}-
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Check spend and alert if over cap
+      - name: Check spend and notify only on threshold events
         env:
           OPENAI_ADMIN_KEY: ${{ secrets.OPENAI_ADMIN_KEY }}
           ANTHROPIC_ADMIN_KEY: ${{ secrets.ANTHROPIC_ADMIN_KEY }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          CAPPED_WEBHOOK_URL: ${{ secrets.CAPPED_WEBHOOK_URL }}
           CAP_USD: "100"
         run: |
-          npx -y capped-cost@latest --cap="$CAP_USD" --threshold=0.8 || \
-          curl -sS -X POST -H 'Content-Type: application/json' \
-            -d "{\"text\":\"AI spend >= 80% of \$$CAP_USD cap. See https://platform.openai.com/usage\"}" \
-            "$SLACK_WEBHOOK_URL"
+          npx -y capped-cost@latest alert \
+            --provider=all \
+            --cap="$CAP_USD" \
+            --thresholds=0.8,1,1.5 \
+            --state-file=.capped-cost.state.json \
+            --format=table
+
+      - name: Save alert state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .capped-cost.state.json
+          key: capped-cost-state-${{ steps.state.outputs.month }}-${{ github.run_id }}
