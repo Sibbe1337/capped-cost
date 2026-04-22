@@ -1,6 +1,6 @@
 {
   "name": "capped-cost",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Read monthly OpenAI and Anthropic admin spend, forecast budget burn, and drive deduped webhook alerts. Zero runtime dependencies.",
   "license": "MIT",
   "author": "Kodaren1338 (https://getcapped.app)",

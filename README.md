@@ -8,6 +8,8 @@
 
 It is built for scripts, cron jobs, CI, and internal tooling. It is not a billing platform, not a dashboard SaaS, and not a secret-management solution.
 
+It is part of **Open source by Capped**: small, scriptable guardrails for developers who do not want another dashboard.
+
 - Node 18+
 - Zero runtime dependencies
 - ESM + CJS
@@ -26,6 +28,18 @@ npm install capped-cost
 - Breaks spend down by model / line item
 - Projects end-of-month spend with explainable strategies
 - Sends Slack or Discord alerts only on threshold crossings or cooldown expiry
+
+## Where It Fits
+
+Capped now has two paths:
+
+- **Capped Extension** for the plug-and-play path
+- **Open source by Capped** for cron, CI, and custom workflows
+
+Within that open-source path:
+
+- `capped-cost` is the opinionated spend-specific tool
+- `threshold-hook` is the lower-level generic threshold primitive
 
 ## What It Does Not Do
 

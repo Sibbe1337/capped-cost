@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented here.
 
+## 0.4.1 - 2026-04-22
+
+### Fixed
+
+- `npx capped-cost --help` and other direct CLI invocations now work when the executable path is a symlinked npm bin script
+- added a regression test for symlink-based direct invocation so the CLI entrypoint keeps working through npm / npx
+
 ## 0.4.0 - 2026-04-22
 
 ### Added

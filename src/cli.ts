@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -760,9 +760,14 @@ async function runAlert(argv: string[], shared: SharedOptions): Promise<number> 
   }
 }
 
-function directInvocation(): boolean {
-  if (!process.argv[1]) return false;
-  return import.meta.url === pathToFileURL(process.argv[1]).href;
+export function isDirectInvocation(importMetaUrl: string, argvEntry = process.argv[1]): boolean {
+  if (!argvEntry) return false;
+
+  try {
+    return realpathSync(fileURLToPath(importMetaUrl)) === realpathSync(argvEntry);
+  } catch {
+    return importMetaUrl === pathToFileURL(argvEntry).href;
+  }
 }
 
 export async function runCli(argv: string[], deps: CliRunDeps = {}): Promise<number> {
@@ -835,6 +840,6 @@ async function main() {
   }
 }
 
-if (directInvocation()) {
+if (isDirectInvocation(import.meta.url)) {
   void main();
 }

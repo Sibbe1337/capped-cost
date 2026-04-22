@@ -1,8 +1,9 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, symlinkSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runCli } from "../src/cli.js";
+import { isDirectInvocation, runCli } from "../src/cli.js";
 import { MemoryStream, makeOpenAIFetch, makeTempDir } from "./helpers.js";
 
 const ENV_KEYS = [
@@ -221,5 +222,14 @@ describe("runCli", () => {
     expect(exitCode).toBe(0);
     expect(json.totalUsd).toBe(5);
     expect(stderr.output).toBe("");
+  });
+
+  it("treats a symlinked bin path as a direct invocation", () => {
+    const cwd = makeTempDir("capped-cli-symlink");
+    const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+    const symlinkPath = `${cwd}/capped-cost`;
+    symlinkSync(cliPath, symlinkPath);
+
+    expect(isDirectInvocation(new URL("../src/cli.ts", import.meta.url).href, symlinkPath)).toBe(true);
   });
 });
