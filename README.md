@@ -225,9 +225,9 @@ interface FetchOptions { fetch?: typeof globalThis.fetch; signal?: AbortSignal; 
 
 ## Roadmap
 
-- [ ] Gemini adapter (via Google Cloud Billing API) — [#1](https://github.com/Sibbe1337/capped-cost/issues/1)
-- [ ] AWS Bedrock adapter (via Cost Explorer) — [#2](https://github.com/Sibbe1337/capped-cost/issues/2)
-- [ ] Rate-limiter output (requests/day + tokens/day) — [#3](https://github.com/Sibbe1337/capped-cost/issues/3)
+- [ ] Gemini adapter (via Google Cloud Billing API) — [#2](https://github.com/Sibbe1337/capped-cost/issues/2)
+- [ ] AWS Bedrock adapter (via Cost Explorer) — [#3](https://github.com/Sibbe1337/capped-cost/issues/3)
+- [ ] Rate-limit metrics output (requests/day + tokens/day) — [#1](https://github.com/Sibbe1337/capped-cost/issues/1)
 
 PRs welcome. Gemini and Bedrock each need provider-specific auth flows that would break the zero-deps promise of this package — if built, they'll likely ship as separate companion packages (`capped-cost-gemini`, `capped-cost-bedrock`) so this core stays lean.
 
